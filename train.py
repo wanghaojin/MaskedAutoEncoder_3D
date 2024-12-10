@@ -136,7 +136,7 @@ def main():
     ])
 
     temp_dataset = TIFImageDataset(
-        data_dir='../../../data',
+        data_dir='../data',
         transform=transform_for_stats
     )
 
@@ -190,7 +190,7 @@ def main():
     ).to(device)
 
     full_dataset = TIFImageDataset(
-        data_dir='../../../data',
+        data_dir='../data',
         transform=None
     )
 
