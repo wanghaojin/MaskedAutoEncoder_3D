@@ -4,7 +4,7 @@ import torch.optim as optim
 from torch.utils.data import DataLoader, random_split
 from torchvision import transforms
 from torch.cuda.amp import autocast, GradScaler
-from model_MAE import MAE  
+from MaskedAutoEncoder_3D.model_MAE import MAE  
 from vit import ViT
 from tqdm import tqdm
 import matplotlib.pyplot as plt
