@@ -4,7 +4,7 @@ import torch.optim as optim
 from torch.utils.data import DataLoader, random_split
 from torchvision import transforms
 from torch.cuda.amp import autocast, GradScaler
-from MaskedAutoEncoder_3D.model_MAE import MAE  
+from model_MAE import MAE  
 from vit import ViT
 from tqdm import tqdm
 import matplotlib.pyplot as plt
@@ -227,7 +227,7 @@ def main():
 
     best_loss = float('inf')
     patience = 500
-    min_delta = 0.00001 
+    min_delta = 0.000005 
     patience_counter = 0
     loss_history = []
     
@@ -278,7 +278,7 @@ def main():
 
      
         if (epoch + 1) % 100 == 0:
-            checkpoint_path = f"model_gray/mae_epoch_{epoch+1}.pth"
+            checkpoint_path = f"model/mae_epoch_{epoch+1}.pth"
             torch.save({
                 'epoch': epoch + 1,
                 'model_state_dict': model.state_dict(),
