@@ -10,10 +10,10 @@ from tqdm import tqdm
 import matplotlib.pyplot as plt
 import numpy as np
 from utils import calculate_dataset_stats, TIFImageDataset, SubsetWithTransform
+from utils import interpolate_pos_embed
 
 os.makedirs('model', exist_ok=True)
 os.makedirs('validation_results', exist_ok=True)
-
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(f"Device: {device}")
@@ -43,7 +43,7 @@ def train(model, train_loader, optimizer, scaler, device, accumulation_steps=4):
 
     return total_loss / len(train_loader)
 
-def validate(model, val_loader, device):
+def validate(model, val_loader, device, mean, std):
     model.eval()
     total_loss = 0
     
@@ -63,14 +63,14 @@ def validate(model, val_loader, device):
             if i < 3:
                 original_image = inputs[0]
                 masked_image = original_image.clone()
-                c, h, w = original_image.shape
+                c, h, w = original_image.shape  # c=1 for grayscale
                 patch_size = model.patch_h
                 n_patches = (h // patch_size) * (w // patch_size)
                 n_masked = int(model.mask_ratio * n_patches)
                 
                 torch.set_rng_state(rng_state)
                 mask = torch.randperm(n_patches)[:n_masked].to(device)
-                mask_full = torch.zeros(c, h, w, device=device) 
+                mask_full = torch.zeros(c, h, w, device=device)
                 for idx_m in mask:
                     i_patch = (idx_m // (w // patch_size)) * patch_size
                     j_patch = (idx_m % (w // patch_size)) * patch_size
@@ -82,14 +82,25 @@ def validate(model, val_loader, device):
 
                 combined = original_image * (1 - mask_full) + reconstructed * mask_full
 
-                # 因为无归一化操作，输入原本就在[0,1]
-                original_np = original_image.cpu().numpy()
+                # denormalize回[0,1]
+                def denormalize(x):
+                    mean_tensor = mean.view(1, 1, 1).to(device)  # mean是单通道
+                    std_tensor = std.view(1, 1, 1).to(device)
+                    return x * std_tensor + mean_tensor
+                
+                original_image = denormalize(original_image)
+                masked_image = denormalize(masked_image)
+                reconstructed = denormalize(reconstructed)
+                combined = denormalize(combined)
+ 
+                original_np = original_image.cpu().numpy()  
                 masked_np = masked_image.cpu().numpy()
                 reconstructed_np = reconstructed.cpu().numpy()
                 combined_np = combined.cpu().numpy()
                 
                 fig, axes = plt.subplots(1, 4, figsize=(20, 5))
                 
+                # 因为是灰度图，original_np.shape = [1,H,W]
                 axes[0].imshow(original_np[0].clip(0, 1), cmap='gray')
                 axes[0].set_title('Original Image')
                 axes[0].axis('off')
@@ -128,11 +139,12 @@ def main():
     num_epochs = 5000
     mask_ratio = 0.75 
 
-    # 用于统计均值和std的transform，不归一，直接ToTensor()将[0,255]变成[0,1]
+    # 用于统计mean和std的transform
+    # 转为灰度 L，然后Resize，再ToTensor()
     transform_for_stats = transforms.Compose([
         transforms.Lambda(lambda img: img.convert('L')),
         transforms.Resize((1024, 1024)),
-        transforms.ToTensor()
+        transforms.ToTensor()  # [0,1]
     ])
 
     temp_dataset = TIFImageDataset(
@@ -142,33 +154,35 @@ def main():
 
     temp_loader = DataLoader(
         temp_dataset,
-        batch_size=1,
+        batch_size=32,
         num_workers=4,
         shuffle=False
     )
 
-    # mean, std = calculate_dataset_stats(temp_loader)
-    # print(f"Mean: {mean.tolist()}")
-    # print(f"Std: {std.tolist()}")
+    mean, std = calculate_dataset_stats(temp_loader)
+    print(f"Mean: {mean.tolist()}")
+    print(f"Std: {std.tolist()}")
 
-    # 训练时的transform：不使用Normalize，只使用ToTensor()
+    # 使用统计到的mean,std进行归一化(灰度单通道)
     transform_train = transforms.Compose([
         transforms.Lambda(lambda img: img.convert('L')),
         transforms.Resize((1024, 1024)),
         transforms.RandomHorizontalFlip(),
         transforms.RandomVerticalFlip(),
-        transforms.ToTensor()  # 输出[0,1]范围
+        transforms.ToTensor(),
+        transforms.Normalize(mean=mean.tolist(), std=std.tolist())
     ])
 
     transform_val = transforms.Compose([
         transforms.Lambda(lambda img: img.convert('L')),
         transforms.Resize((1024, 1024)),
-        transforms.ToTensor() # 同样仅[0,1]范围
+        transforms.ToTensor(),
+        transforms.Normalize(mean=mean.tolist(), std=std.tolist())
     ])
 
     encoder = ViT(
         image_size=(1024, 1024),
-        patch_size=(32, 32),
+        patch_size=(64, 64),
         num_classes=1000,
         dim=1280,
         depth=24,
@@ -177,7 +191,7 @@ def main():
         dim_per_head=64,
         dropout=0.1,
         pool='cls',
-        channels=1  
+        channels=1  # 灰度单通道
     )
     
     model = MAE(
@@ -188,6 +202,12 @@ def main():
         num_decoder_heads=32,
         decoder_dim_per_head=16
     ).to(device)
+
+    # 如果需要从预训练模型加载并改变尺寸，可在此调用interpolate_pos_embed:
+    # checkpoint = torch.load('model/mae_pretrained.pth', map_location='cpu')
+    # checkpoint_model = checkpoint['model_state_dict']
+    # interpolate_pos_embed(model, checkpoint_model)
+    # model.load_state_dict(checkpoint_model, strict=False)
 
     full_dataset = TIFImageDataset(
         data_dir='../data',
@@ -227,7 +247,7 @@ def main():
 
     best_loss = float('inf')
     patience = 500
-    min_delta = 0.000005 
+    min_delta = 0.00001 
     patience_counter = 0
     loss_history = []
     
@@ -235,7 +255,7 @@ def main():
         print(f"\nEpoch {epoch+1}/{num_epochs}")
         
         train_loss = train(model, train_loader, optimizer, scaler, device)
-        val_loss = validate(model, val_loader, device)
+        val_loss = validate(model, val_loader, device, mean, std)
         loss_history.append(val_loss)
         
         scheduler.step()

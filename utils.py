@@ -101,7 +101,7 @@ class TIFImageDataset(Dataset):
     def __getitem__(self, idx):
         img_path = os.path.join(self.data_dir, self.image_files[idx])
         image = Image.open(img_path)
-        image = image.convert('L')
+        image = image.convert('RGB')
         if self.transform:
             image = self.transform(image)
         return image, 0 
@@ -117,7 +117,7 @@ class SubsetWithTransform(Dataset):
     def __getitem__(self, idx):
         data, _ = self.subset[idx]  
         if not isinstance(data, torch.Tensor):
-            data = data.convert('L')
+            data = data.convert('RGB')
 
         if self.transform:
             data = self.transform(data)
@@ -142,7 +142,6 @@ def calculate_dataset_stats(dataloader):
     return mean, std
 
 def interpolate_pos_embed(model, checkpoint_model):
-    # 如果后续需要改变图像尺寸再使用，此处保留
     if 'pos_embed' not in checkpoint_model:
         return
 
